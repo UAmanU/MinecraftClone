@@ -1,0 +1,6 @@
+#include "Game/game_renderer.h"
+#include <cmath>
+#include "Entity/Object/Player/player.h"
+#include "Config/math_utils.h"
+void GameRenderer::DrawWorld(const std::vector<BlockType>&w,const Player&p,const std::vector<ItemDrop>&d,const std::vector<Pig>& pigs)const{BeginMode3D(p.Camera());for(int x=0;x<50;++x)for(int y=0;y<16;++y)for(int z=0;z<50;++z){auto b=w[(size_t)(x*800+y*50+z)];if(b==BlockType::Air)continue;Vector3 v{(float)x,(float)y,(float)z};DrawCube(v,1,1,1,BlockColor(b));DrawCubeWires(v,1,1,1,Color{30,40,30,80});}for(auto&a:pigs)a.Draw();for(auto&i:d)DrawCube(i.position,.2F,.2F,.2F,BlockColor(i.type));EndMode3D();}
+bool GameRenderer::Raycast(const std::vector<BlockType>&w,const Camera3D&c,Vector3&hit,Vector3&adj)const{auto dir=Math3D::Normalize(Math3D::Subtract(c.target,c.position));for(float d=0;d<6;d+=.08F){auto p=Math3D::Add(c.position,Math3D::Scale(dir,d));int x=(int)floor(p.x+.5F),y=(int)floor(p.y+.5F),z=(int)floor(p.z+.5F);if(x<0||x>=50||y<0||y>=16||z<0||z>=50)continue;if(w[(size_t)(x*800+y*50+z)]!=BlockType::Air){hit={(float)x,(float)y,(float)z};auto q=Math3D::Add(c.position,Math3D::Scale(dir,d-.08F));adj={floor(q.x+.5F),floor(q.y+.5F),floor(q.z+.5F)};return true;}}return false;}
