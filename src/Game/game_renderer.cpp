@@ -1,6 +1,58 @@
 #include "Game/game_renderer.h"
+
 #include <cmath>
+
+#include "Config/mining_config.h"
+#include "Config/world_config.h"
 #include "Entity/Object/Player/player.h"
 #include "Config/math_utils.h"
-void GameRenderer::DrawWorld(const std::vector<BlockType>&w,const Player&p,const std::vector<ItemDrop>&d,const std::vector<Pig>& pigs)const{BeginMode3D(p.Camera());for(int x=0;x<50;++x)for(int y=0;y<16;++y)for(int z=0;z<50;++z){auto b=w[(size_t)(x*800+y*50+z)];if(b==BlockType::Air)continue;Vector3 v{(float)x,(float)y,(float)z};DrawCube(v,1,1,1,BlockColor(b));DrawCubeWires(v,1,1,1,Color{30,40,30,80});}for(auto&a:pigs)a.Draw();for(auto&i:d)DrawCube(i.position,.2F,.2F,.2F,BlockColor(i.type));EndMode3D();}
-bool GameRenderer::Raycast(const std::vector<BlockType>&w,const Camera3D&c,Vector3&hit,Vector3&adj)const{auto dir=Math3D::Normalize(Math3D::Subtract(c.target,c.position));for(float d=0;d<6;d+=.08F){auto p=Math3D::Add(c.position,Math3D::Scale(dir,d));int x=(int)floor(p.x+.5F),y=(int)floor(p.y+.5F),z=(int)floor(p.z+.5F);if(x<0||x>=50||y<0||y>=16||z<0||z>=50)continue;if(w[(size_t)(x*800+y*50+z)]!=BlockType::Air){hit={(float)x,(float)y,(float)z};auto q=Math3D::Add(c.position,Math3D::Scale(dir,d-.08F));adj={floor(q.x+.5F),floor(q.y+.5F),floor(q.z+.5F)};return true;}}return false;}
+
+void GameRenderer::DrawWorld(const std::vector<BlockType>& world, const Player& player,
+                             const std::vector<ItemDrop>& drops, const std::vector<Pig>& pigs) const {
+    BeginMode3D(player.Camera());
+    for (int x = 0; x < WorldConfig::WORLD_SIZE; ++x) {
+        for (int y = 0; y < WorldConfig::WORLD_HEIGHT; ++y) {
+            for (int z = 0; z < WorldConfig::WORLD_SIZE; ++z) {
+                const std::size_t index = static_cast<std::size_t>(
+                    x * WorldConfig::WORLD_SIZE * WorldConfig::WORLD_HEIGHT
+                    + y * WorldConfig::WORLD_SIZE + z);
+                const BlockType block = world[index];
+                if (block == BlockType::Air) continue;
+                const Vector3 position{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+                DrawCube(position, 1.0F, 1.0F, 1.0F, BlockColor(block));
+                DrawCubeWires(position, 1.0F, 1.0F, 1.0F, Color{30, 40, 30, 80});
+            }
+        }
+    }
+    for (const Pig& pig : pigs) pig.Draw();
+    for (const ItemDrop& drop : drops) {
+        DrawCube(drop.position, MiningConfig::DROP_SIZE, MiningConfig::DROP_SIZE,
+                 MiningConfig::DROP_SIZE, BlockColor(drop.type));
+    }
+    EndMode3D();
+}
+
+bool GameRenderer::Raycast(const std::vector<BlockType>& world, const Camera3D& camera,
+                           Vector3& hit, Vector3& adjacent) const {
+    const Vector3 direction = Math3D::Normalize(Math3D::Subtract(camera.target, camera.position));
+    for (float distance = 0.0F; distance <= WorldConfig::REACH; distance += 0.08F) {
+        const Vector3 point = Math3D::Add(camera.position, Math3D::Scale(direction, distance));
+        const int x = static_cast<int>(std::floor(point.x + 0.5F));
+        const int y = static_cast<int>(std::floor(point.y + 0.5F));
+        const int z = static_cast<int>(std::floor(point.z + 0.5F));
+        if (x < 0 || x >= WorldConfig::WORLD_SIZE || y < 0 || y >= WorldConfig::WORLD_HEIGHT
+            || z < 0 || z >= WorldConfig::WORLD_SIZE) continue;
+        const std::size_t index = static_cast<std::size_t>(
+            x * WorldConfig::WORLD_SIZE * WorldConfig::WORLD_HEIGHT + y * WorldConfig::WORLD_SIZE + z);
+        if (world[index] == BlockType::Air) continue;
+
+        hit = Vector3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+        const Vector3 previous = Math3D::Add(camera.position, Math3D::Scale(direction, distance - 0.08F));
+        adjacent = Vector3{
+            std::floor(previous.x + 0.5F),
+            std::floor(previous.y + 0.5F),
+            std::floor(previous.z + 0.5F)};
+        return true;
+    }
+    return false;
+}
