@@ -200,8 +200,8 @@ void Game::Update(float delta_time) {
         const float push=std::min(min_distance-distance,delta_time*2.0F);
         const float push_x=direction_x*push,push_z=direction_z*push;
         const float old_x=camera.position.x,old_z=camera.position.z;
-        if(!CollidesAt(camera.position.x+dx*push,camera.position.y,camera.position.z)) camera.position.x+=dx*push;
-        if(!CollidesAt(camera.position.x,camera.position.y,camera.position.z+dz*push)) camera.position.z+=dz*push;
+        if(!CollidesAt(camera.position.x+push_x,camera.position.y,camera.position.z)) camera.position.x+=push_x;
+        if(!CollidesAt(camera.position.x,camera.position.y,camera.position.z+push_z)) camera.position.z+=push_z;
         camera.target.x+=camera.position.x-old_x;
         camera.target.z+=camera.position.z-old_z;
     }
@@ -260,13 +260,13 @@ void Game::Update(float delta_time) {
         drop->position.y += drop->vertical_velocity * delta_time;
         const int dx = static_cast<int>(std::floor(drop->position.x + 0.5F));
         const int dz = static_cast<int>(std::floor(drop->position.z + 0.5F));
-        'float support = 0.0F;
+        float support = 0.0F;
         for (int by=WorldConfig::WORLD_HEIGHT-1; by>=0; --by) {
             if (world_.GetBlock(dx,by,dz)!=BlockType::Air && by+0.5F<=drop->position.y) {
                 support=by+0.5F;
                 break;
             }
-        }'
+        }
         if (drop->position.y <= support + MiningConfig::DROP_SIZE * 0.5F) {
             drop->position.y = support + MiningConfig::DROP_SIZE * 0.5F;
             drop->vertical_velocity = 0.0F;
