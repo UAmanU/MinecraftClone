@@ -1,65 +1,97 @@
 #include "Game/game_renderer.h"
 
-#include <cmath>
 #include <algorithm>
-
+#include <cmath>
+#include "Config/game_config.h"
 #include "Config/mining_config.h"
 #include "Config/world_config.h"
-#include "Entity/Object/Player/player.h"
 #include "Config/math_utils.h"
+#include "Entity/Object/Player/player.h"
+#include "GUI/gui_renderer.h"
+#include "raylib.h"
 
-void GameRenderer::DrawWorld(const std::vector<BlockType>& world, const Player& player,
+void GameRenderer::DrawFrame(const World& world, const Player& player,
+                             const std::vector<ItemDrop>& drops, const std::vector<Pig>& pigs,
+                             bool inventory_open, bool crafting_open, float mining_progress) const {
+    ClearBackground(SKYBLUE);
+    DrawWorld(world, player, drops, pigs);
+    GuiRenderer().Draw(player, inventory_open);
+    if (crafting_open) DrawCraftingMenu();
+    if (mining_progress >= 0.0F) DrawMiningProgress(mining_progress);
+}
+
+void GameRenderer::DrawWorld(const World& world, const Player& player,
                              const std::vector<ItemDrop>& drops, const std::vector<Pig>& pigs) const {
-    BeginMode3D(player.Camera());
-    for (int x = 0; x < WorldConfig::WORLD_SIZE; ++x) {
-        for (int y = 0; y < WorldConfig::WORLD_HEIGHT; ++y) {
-            for (int z = 0; z < WorldConfig::WORLD_SIZE; ++z) {
-                const std::size_t index = static_cast<std::size_t>(
-                    x * WorldConfig::WORLD_SIZE * WorldConfig::WORLD_HEIGHT
-                    + y * WorldConfig::WORLD_SIZE + z);
-                const BlockType block = world[index];
-                if (block == BlockType::Air) continue;
-                const Vector3 position{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-                bool exposed=false;
-                constexpr int offsets[6][3]{{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
-                for(const auto& offset:offsets){const int nx=x+offset[0],ny=y+offset[1],nz=z+offset[2];if(nx<0||nx>=WorldConfig::WORLD_SIZE||ny<0||ny>=WorldConfig::WORLD_HEIGHT||nz<0||nz>=WorldConfig::WORLD_SIZE||world[static_cast<std::size_t>(nx*WorldConfig::WORLD_SIZE*WorldConfig::WORLD_HEIGHT+ny*WorldConfig::WORLD_SIZE+nz)]==BlockType::Air){exposed=true;break;}}
-                if(!exposed)continue;
-                Color tint=BlockColor(block);const unsigned noise=static_cast<unsigned>(x*73856093u)^static_cast<unsigned>(y*19349663u)^static_cast<unsigned>(z*83492791u);const int shade=static_cast<int>(noise%19u)-9;
-                tint.r=static_cast<unsigned char>(std::clamp(static_cast<int>(tint.r)+shade,0,255));tint.g=static_cast<unsigned char>(std::clamp(static_cast<int>(tint.g)+shade,0,255));tint.b=static_cast<unsigned char>(std::clamp(static_cast<int>(tint.b)+shade,0,255));
-                DrawCube(position,1.0F,1.0F,1.0F,tint);DrawCubeWires(position,1.0F,1.0F,1.0F,Color{30,40,30,55});
-            }
+    const Camera3D& camera=player.Camera();
+    BeginMode3D(camera);
+    constexpr float render_distance=43.0F;
+    const float render_distance_squared=render_distance*render_distance;
+    constexpr int offsets[6][3]{{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+    for(const auto& [chunk_coord,chunk]:world.LoadedChunks()) {
+        const float chunk_x=static_cast<float>(chunk_coord.x*WorldConfig::CHUNK_SIZE);
+        const float chunk_z=static_cast<float>(chunk_coord.z*WorldConfig::CHUNK_SIZE);
+        const float closest_x=std::clamp(camera.position.x,chunk_x,chunk_x+WorldConfig::CHUNK_SIZE);
+        const float closest_z=std::clamp(camera.position.z,chunk_z,chunk_z+WorldConfig::CHUNK_SIZE);
+        const float dx=closest_x-camera.position.x,dz=closest_z-camera.position.z;
+        if(dx*dx+dz*dz>render_distance_squared) continue;
+        for(int lx=0;lx<WorldConfig::CHUNK_SIZE;++lx) for(int y=0;y<WorldConfig::WORLD_HEIGHT;++y) for(int lz=0;lz<WorldConfig::CHUNK_SIZE;++lz) {
+            const BlockType block=chunk.blocks[static_cast<std::size_t>((y*WorldConfig::CHUNK_SIZE+lx)*WorldConfig::CHUNK_SIZE+lz)];
+            if(block==BlockType::Air) continue;
+            const int x=chunk_coord.x*WorldConfig::CHUNK_SIZE+lx,z=chunk_coord.z*WorldConfig::CHUNK_SIZE+lz;
+            const float vx=static_cast<float>(x)-camera.position.x,vz=static_cast<float>(z)-camera.position.z;
+            if(vx*vx+vz*vz>render_distance_squared) continue;
+            bool exposed=false;
+            for(const auto& offset:offsets) if(world.GetBlock(x+offset[0],y+offset[1],z+offset[2])==BlockType::Air){exposed=true;break;}
+            if(!exposed) continue;
+            Color tint=BlockColor(block);
+            const unsigned noise=static_cast<unsigned>(x*73856093u)^static_cast<unsigned>(y*19349663u)^static_cast<unsigned>(z*83492791u);
+            const int shade=static_cast<int>(noise%19U)-9;
+            tint.r=static_cast<unsigned char>(std::clamp(static_cast<int>(tint.r)+shade,0,255));
+            tint.g=static_cast<unsigned char>(std::clamp(static_cast<int>(tint.g)+shade,0,255));
+            tint.b=static_cast<unsigned char>(std::clamp(static_cast<int>(tint.b)+shade,0,255));
+            DrawCube({static_cast<float>(x),static_cast<float>(y),static_cast<float>(z)},1,1,1,tint);
         }
     }
-    for(int cloud=0;cloud<9;++cloud){const float cx=static_cast<float>((cloud*13+5)%WorldConfig::WORLD_SIZE),cz=static_cast<float>((cloud*19+8)%WorldConfig::WORLD_SIZE),cy=static_cast<float>(WorldConfig::WORLD_HEIGHT+3+(cloud%2));DrawCube({cx,cy,cz},5.0F,0.7F,2.0F,Color{248,251,255,255});DrawCube({cx+2.0F,cy+0.3F,cz},2.5F,0.8F,2.0F,Color{248,251,255,255});}
-    for (const Pig& pig : pigs) pig.Draw();
-    for (const ItemDrop& drop : drops) {
-        DrawCube(drop.position, MiningConfig::DROP_SIZE, MiningConfig::DROP_SIZE,
-                 MiningConfig::DROP_SIZE, BlockColor(drop.type));
+    const int cloud_x=static_cast<int>(std::floor(camera.position.x/32.0F))*32;
+    const int cloud_z=static_cast<int>(std::floor(camera.position.z/32.0F))*32;
+    for(int cx=-2;cx<=2;++cx) for(int cz=-2;cz<=2;++cz) {
+        const float x=static_cast<float>(cloud_x+cx*32),z=static_cast<float>(cloud_z+cz*32),y=static_cast<float>(WorldConfig::WORLD_HEIGHT+4);
+        DrawCube({x,y,z},6.0F,0.8F,2.4F,Color{248,251,255,255});
+        DrawCube({x+2.3F,y+0.3F,z},3.0F,0.7F,2.2F,Color{248,251,255,255});
     }
+    for(const Pig& pig:pigs) pig.Draw();
+    for(const ItemDrop& drop:drops) DrawCube(drop.position,MiningConfig::DROP_SIZE,MiningConfig::DROP_SIZE,MiningConfig::DROP_SIZE,BlockColor(drop.type));
     EndMode3D();
 }
 
-bool GameRenderer::Raycast(const std::vector<BlockType>& world, const Camera3D& camera,
-                           Vector3& hit, Vector3& adjacent) const {
-    const Vector3 direction = Math3D::Normalize(Math3D::Subtract(camera.target, camera.position));
-    for (float distance = 0.0F; distance <= WorldConfig::REACH; distance += 0.08F) {
-        const Vector3 point = Math3D::Add(camera.position, Math3D::Scale(direction, distance));
-        const int x = static_cast<int>(std::floor(point.x + 0.5F));
-        const int y = static_cast<int>(std::floor(point.y + 0.5F));
-        const int z = static_cast<int>(std::floor(point.z + 0.5F));
-        if (x < 0 || x >= WorldConfig::WORLD_SIZE || y < 0 || y >= WorldConfig::WORLD_HEIGHT
-            || z < 0 || z >= WorldConfig::WORLD_SIZE) continue;
-        const std::size_t index = static_cast<std::size_t>(
-            x * WorldConfig::WORLD_SIZE * WorldConfig::WORLD_HEIGHT + y * WorldConfig::WORLD_SIZE + z);
-        if (world[index] == BlockType::Air) continue;
-
-        hit = Vector3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
-        const Vector3 previous = Math3D::Add(camera.position, Math3D::Scale(direction, distance - 0.08F));
-        adjacent = Vector3{
-            std::floor(previous.x + 0.5F),
-            std::floor(previous.y + 0.5F),
-            std::floor(previous.z + 0.5F)};
+bool GameRenderer::Raycast(const World& world,const Camera3D& camera,Vector3& hit,Vector3& adjacent) const {
+    const Vector3 direction=Math3D::Normalize(Math3D::Subtract(camera.target,camera.position));
+    for(float distance=0;distance<=WorldConfig::REACH;distance+=0.06F) {
+        const Vector3 point=Math3D::Add(camera.position,Math3D::Scale(direction,distance));
+        const int x=static_cast<int>(std::floor(point.x+0.5F)),y=static_cast<int>(std::floor(point.y+0.5F)),z=static_cast<int>(std::floor(point.z+0.5F));
+        if(y<0||y>=WorldConfig::WORLD_HEIGHT||world.GetBlock(x,y,z)==BlockType::Air) continue;
+        hit={static_cast<float>(x),static_cast<float>(y),static_cast<float>(z)};
+        const Vector3 previous=Math3D::Add(camera.position,Math3D::Scale(direction,distance-0.06F));
+        adjacent={std::floor(previous.x+0.5F),std::floor(previous.y+0.5F),std::floor(previous.z+0.5F)};
         return true;
     }
     return false;
+}
+
+void GameRenderer::DrawCraftingMenu() const {
+    DrawRectangle(GameConfig::SCREEN_WIDTH/2-290,190,580,360,Color{66,53,43,245});
+    DrawRectangleLines(GameConfig::SCREEN_WIDTH/2-290,190,580,360,RAYWHITE);
+    DrawText("CRAFTING TABLE",GameConfig::SCREEN_WIDTH/2-135,210,32,WHITE);
+    DrawText("K  Sticks: 2 Planks",GameConfig::SCREEN_WIDTH/2-230,270,22,RAYWHITE);
+    DrawText("P  Pickaxe: 3 Planks + 2 Sticks",GameConfig::SCREEN_WIDTH/2-230,310,22,RAYWHITE);
+    DrawText("A  Axe: 3 Planks + 2 Sticks",GameConfig::SCREEN_WIDTH/2-230,350,22,RAYWHITE);
+    DrawText("H  Shovel: 1 Plank + 2 Sticks",GameConfig::SCREEN_WIDTH/2-230,390,22,RAYWHITE);
+    DrawText("S  Sword: 2 Planks + 1 Stick",GameConfig::SCREEN_WIDTH/2-230,430,22,RAYWHITE);
+    DrawText("Escape to close",GameConfig::SCREEN_WIDTH/2-75,500,18,LIGHTGRAY);
+}
+
+void GameRenderer::DrawMiningProgress(float progress) const {
+    const int x=GameConfig::SCREEN_WIDTH/2-90,y=GameConfig::SCREEN_HEIGHT/2+24;
+    DrawRectangle(x,y,180,12,Color{0,0,0,180});
+    DrawRectangle(x+2,y+2,static_cast<int>(176.0F*std::clamp(progress,0.0F,1.0F)),8,GOLD);
 }
