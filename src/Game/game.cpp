@@ -15,7 +15,7 @@ Game::Game()
     : renderer_(std::make_unique<GameRenderer>()),
       player_(std::make_unique<Player>(Vector3{
           static_cast<float>(WorldConfig::WORLD_SIZE / 2),
-          5.0F,
+          static_cast<float>(WorldConfig::BASE_TERRAIN_HEIGHT + 2),
           static_cast<float>(WorldConfig::WORLD_SIZE / 2)})),
       world_(static_cast<std::size_t>(WorldConfig::WORLD_SIZE * WorldConfig::WORLD_HEIGHT * WorldConfig::WORLD_SIZE),
              BlockType::Air) {
@@ -31,19 +31,19 @@ int Game::Index(int x, int y, int z) const {
 void Game::Generate() {
     for (int x = 0; x < WorldConfig::WORLD_SIZE; ++x) {
         for (int z = 0; z < WorldConfig::WORLD_SIZE; ++z) {
-            const int height = 2 + static_cast<int>(
+            const int height = WorldConfig::BASE_TERRAIN_HEIGHT + static_cast<int>(
                 std::round(std::sin(x * 0.22F) * 0.7F + std::cos(z * 0.19F) * 0.7F));
             for (int y = 0; y <= height; ++y) {
                 world_[static_cast<std::size_t>(Index(x, y, z))] =
                     y == height ? BlockType::Grass
-                    : y >= height - 2 ? BlockType::Dirt
+                    : y >= height - WorldConfig::DIRT_LAYER_DEPTH ? BlockType::Dirt
                     : BlockType::Stone;
             }
         }
     }
 
-    for (int x = 5; x < WorldConfig::WORLD_SIZE - 4; x += 7) {
-        for (int z = 5; z < WorldConfig::WORLD_SIZE - 4; z += 8) {
+    for (int x = 4; x < WorldConfig::WORLD_SIZE - 4; x += 5) {
+        for (int z = 4; z < WorldConfig::WORLD_SIZE - 4; z += 6) {
             if (GetRandomValue(0, 2) == 0) {
                 continue;
             }
@@ -73,6 +73,22 @@ void Game::Generate() {
     }
 }
 
+bool Game::CollidesAt(float x, float camera_y, float z) const {
+    const float half = PlayerConfig::PLAYER_WIDTH * 0.5F;
+    const float feet = camera_y - PlayerConfig::PLAYER_HEIGHT * 0.88F;
+    const float head = feet + PlayerConfig::PLAYER_HEIGHT;
+    const int min_x = static_cast<int>(std::floor(x - half + 0.5F));
+    const int max_x = static_cast<int>(std::floor(x + half - 0.001F + 0.5F));
+    const int min_z = static_cast<int>(std::floor(z - half + 0.5F));
+    const int max_z = static_cast<int>(std::floor(z + half - 0.001F + 0.5F));
+    const int min_y = static_cast<int>(std::floor(feet + 0.5F));
+    const int max_y = static_cast<int>(std::floor(head - 0.001F + 0.5F));
+    for (int bx=min_x; bx<=max_x; ++bx) for (int by=min_y; by<=max_y; ++by) for (int bz=min_z; bz<=max_z; ++bz) {
+        if (bx<0 || bx>=WorldConfig::WORLD_SIZE || bz<0 || bz>=WorldConfig::WORLD_SIZE || by<0) return true;
+        if (by<WorldConfig::WORLD_HEIGHT && world_[static_cast<std::size_t>(Index(bx,by,bz))]!=BlockType::Air) return true;
+    }
+    return false;
+}
 bool Game::Craft(BlockType result, std::initializer_list<std::pair<BlockType, int>> recipe) {
     for (const auto& [type, count] : recipe) {
         if (player_->Count(type) < count) {
@@ -188,10 +204,10 @@ void Game::Update(float delta_time) {
         const float speed = IsKeyDown(KEY_LEFT_SHIFT)
             ? PlayerConfig::SPRINT_SPEED : PlayerConfig::WALK_SPEED;
         movement = Math3D::Scale(Math3D::Normalize(movement), speed * delta_time);
-        camera.position.x = std::clamp(camera.position.x + movement.x, 1.0F,
-                                      static_cast<float>(WorldConfig::WORLD_SIZE - 2));
-        camera.position.z = std::clamp(camera.position.z + movement.z, 1.0F,
-                                      static_cast<float>(WorldConfig::WORLD_SIZE - 2));
+        const float next_x = std::clamp(camera.position.x + movement.x, 1.0F, static_cast<float>(WorldConfig::WORLD_SIZE - 2));
+        if (!CollidesAt(next_x, camera.position.y, camera.position.z)) camera.position.x = next_x;
+        const float next_z = std::clamp(camera.position.z + movement.z, 1.0F, static_cast<float>(WorldConfig::WORLD_SIZE - 2));
+        if (!CollidesAt(camera.position.x, camera.position.y, next_z)) camera.position.z = next_z;
     }
 
     const int block_x = static_cast<int>(std::floor(camera.position.x + 0.5F));
@@ -201,7 +217,7 @@ void Game::Update(float delta_time) {
         && block_z >= 0 && block_z < WorldConfig::WORLD_SIZE) {
         for (int y = WorldConfig::WORLD_HEIGHT - 1; y >= 0; --y) {
             const BlockType block = world_[static_cast<std::size_t>(Index(block_x, y, block_z))];
-            if (block == BlockType::Grass || block == BlockType::Dirt || block == BlockType::Stone) {
+            if (block != BlockType::Air && static_cast<float>(y) + 0.5F <= camera.position.y - PlayerConfig::PLAYER_HEIGHT * 0.88F + 0.08F) {
                 ground_top = static_cast<float>(y) + 0.5F;
                 break;
             }
@@ -213,14 +229,25 @@ void Game::Update(float delta_time) {
     const float feet_y = camera.position.y - eye_height;
     const bool grounded = vertical_velocity_ <= 0.0F && feet_y <= ground_top + 0.04F;
     if (grounded) {
+        if (falling_) {
+            const float fall_distance = fall_start_y_ - feet_y;
+            if (fall_distance > PlayerConfig::SAFE_FALL_DISTANCE) {
+                const int damage = static_cast<int>(std::ceil(fall_distance - PlayerConfig::SAFE_FALL_DISTANCE)) * PlayerConfig::FALL_DAMAGE_PER_BLOCK;
+                player_->Damage(damage);
+            }
+            falling_ = false;
+        }
         camera.position.y = ground_top + eye_height;
         vertical_velocity_ = 0.0F;
-        if (IsKeyPressed(KEY_SPACE)) {
-            vertical_velocity_ = PlayerConfig::JUMP_SPEED;
-        }
+        if (IsKeyPressed(KEY_SPACE)) vertical_velocity_ = PlayerConfig::JUMP_SPEED;
     } else {
+        if (vertical_velocity_ <= 0.0F && !falling_) { falling_ = true; fall_start_y_ = feet_y; }
         vertical_velocity_ -= PlayerConfig::GRAVITY * delta_time;
-        camera.position.y += vertical_velocity_ * delta_time;
+        const float next_y = camera.position.y + vertical_velocity_ * delta_time;
+        if (CollidesAt(camera.position.x, next_y, camera.position.z)) {
+            if (vertical_velocity_ < 0.0F) camera.position.y = ground_top + eye_height;
+            vertical_velocity_ = 0.0F;
+        } else camera.position.y = next_y;
     }
     camera.target.y += camera.position.y - previous_camera_y;
     player_->Update(delta_time);
@@ -276,6 +303,20 @@ void Game::Update(float delta_time) {
     const Vector3 player_position = player_->GetPosition();
     for (auto drop = drops_.begin(); drop != drops_.end();) {
         drop->lifetime -= delta_time;
+        drop->vertical_velocity -= MiningConfig::DROP_GRAVITY * delta_time;
+        drop->position.y += drop->vertical_velocity * delta_time;
+        const int dx = static_cast<int>(std::floor(drop->position.x + 0.5F));
+        const int dz = static_cast<int>(std::floor(drop->position.z + 0.5F));
+        float support = 0.0F;
+        if (dx >= 0 && dx < WorldConfig::WORLD_SIZE && dz >= 0 && dz < WorldConfig::WORLD_SIZE) {
+            for (int by = WorldConfig::WORLD_HEIGHT - 1; by >= 0; --by) {
+                if (world_[static_cast<std::size_t>(Index(dx, by, dz))] != BlockType::Air && by + 0.5F <= drop->position.y) { support = by + 0.5F; break; }
+            }
+        }
+        if (drop->position.y <= support + MiningConfig::DROP_SIZE * 0.5F) {
+            drop->position.y = support + MiningConfig::DROP_SIZE * 0.5F;
+            drop->vertical_velocity = 0.0F;
+        }
         if (Math3D::Distance(player_position, drop->position) < MiningConfig::PICKUP_RADIUS) {
             player_->Add(drop->type);
             drop = drops_.erase(drop);
